@@ -29,12 +29,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SHubertConfig(Wav2Vec2Config):
-    codebook_size: int = field(default=256)
+    codebook_size: int = field(default=256) # Kmeans, K = 256
     max_update: int = II("optimization.max_update")
     channels_embed_dim: int = field(default=384)
     channels_pose_embed_dim: int = field(default=14)
     intermediate_dim: int = field(default=1024)
     mask_strategy: str = field(default="random")
+    glossary_size: int = field(default=105) # CHANGE 105 by the actual number of glosses
+    freeze_encoder: bool = field(
+                                default=False,
+                                metadata={"help": "freeze the SHuBERT backbone; train only the gloss head (linear probe)"},
+                            )
+    
+
 
 @register_model("shubert", dataclass=SHubertConfig)
 class SHubertModel(BaseFairseqModel):
@@ -84,13 +91,11 @@ class SHubertModel(BaseFairseqModel):
         self.layer_norm_body = LayerNorm(self.channel_pose_embed)
 
         self.codebook_size = cfg.codebook_size # number of codebook vectors
-        self.heads = torch.nn.ModuleList([
-                nn.Linear(cfg.encoder_embed_dim, cfg.codebook_size),
-                nn.Linear(cfg.encoder_embed_dim, cfg.codebook_size),
-                nn.Linear(cfg.encoder_embed_dim, cfg.codebook_size),
-                nn.Linear(cfg.encoder_embed_dim, cfg.codebook_size),
-            ]
-        )
+
+        # DEFINE temporal reduction later
+        self.batch_norm = nn.BatchNorm1d(cfg.encoder_embed_dim) # after the temporal average we end up having a tensor of shape (B, C), where C is the output shape of the encoder
+
+        self.head = nn.Linear(cfg.encoder_embed_dim, cfg.glossary_size) # We will only predict the gloss so we just need a single classification layer.
 
 
 
@@ -99,6 +104,14 @@ class SHubertModel(BaseFairseqModel):
         self.left_hand_proj = nn.Linear(self.channel_embed, cfg.intermediate_dim // 4)
         self.right_hand_proj = nn.Linear(self.channel_embed, cfg.intermediate_dim // 4)
         self.body_posture_proj = nn.Linear(self.channel_pose_embed, cfg.intermediate_dim // 4)
+
+
+        if cfg.freeze_encoder:
+            for p in self.parameters():      # freeze everything…
+                p.requires_grad_(False)
+            for p in self.head.parameters(): # …except the gloss head
+                p.requires_grad_(True)
+            logger.info("freeze_encoder=True → linear probe (only the gloss head trains)")
 
 
     def state_dict(self, destination=None, prefix="", keep_vars=False):
@@ -197,7 +210,8 @@ class SHubertModel(BaseFairseqModel):
     def forward(
         self,
         source,
-        padding_mask=None,
+        padding_mask=None, 
+        gloss_labels=None,
         mask=True,
         features_only=False,
         layer=None,
@@ -207,43 +221,13 @@ class SHubertModel(BaseFairseqModel):
         kmeans_labels=None,  
         ):
 
-        # source is a list of dictionaries with keys "face", "left_hand", "right_hand", "body_posture"
-        face_features_list = []
-        left_hand_features_list = []
-        right_hand_features_list = []
-        body_posture_features_list = []
-        label_face_features_list = []
-        label_left_hand_features_list = []
-        label_right_hand_features_list = []
-        label_body_posture_features_list = []
-
-        for sample in source:
-            face_features_list.append(sample["face"])   
-            left_hand_features_list.append(sample["left_hand"]) 
-            right_hand_features_list.append(sample["right_hand"])   
-            body_posture_features_list.append(sample["body_posture"])   
-            label_face_features_list.append(sample["label_face"]) 
-            label_left_hand_features_list.append(sample["label_left_hand"])  
-            label_right_hand_features_list.append(sample["label_right_hand"]) 
-            label_body_posture_features_list.append(sample["label_body_posture"]) 
-            
-            
-
-        face_features = torch.stack(face_features_list) 
-        left_hand_features = torch.stack(left_hand_features_list)   
-        right_hand_features = torch.stack(right_hand_features_list)  
-        body_posture_features = torch.stack(body_posture_features_list) 
-        face_labels = torch.stack(label_face_features_list) 
-        left_hand_labels = torch.stack(label_left_hand_features_list) 
-        right_hand_labels = torch.stack(label_right_hand_features_list) 
-        body_posture_labels = torch.stack(label_body_posture_features_list) 
-        
-
         # Apply layer normalization to each part
-        face_features = self.layer_norm_face(face_features) 
-        left_hand_features = self.layer_norm_lhand(left_hand_features)  
-        right_hand_features = self.layer_norm_rhand(right_hand_features)     
-        body_posture_features = self.layer_norm_body(body_posture_features) 
+        face_features = self.layer_norm_face(source["face"]) 
+        left_hand_features = self.layer_norm_lhand(source["left_hand"])  
+        right_hand_features = self.layer_norm_rhand(source["right_hand"])     
+        body_posture_features = self.layer_norm_body(source["body_posture"]) 
+
+        labels = gloss_labels # shape (Batch_Size, )
 
         # Apply separate linear projections for each channel
         face_features = self.face_proj(face_features)
@@ -252,7 +236,8 @@ class SHubertModel(BaseFairseqModel):
         body_posture_features = self.body_posture_proj(body_posture_features)  
 
 
-        # concatenate the projected features 
+        # concatenate the projected features
+        # its size will be (Batch_Size, T, 4 ,256)
         features = torch.stack(
             [
                 face_features,
@@ -262,7 +247,7 @@ class SHubertModel(BaseFairseqModel):
             ], 
             dim=2) 
         
-        if mask:
+        if mask and self.mask_prob > 0:
             x, mask_indices = self.apply_mask(
                 features,
                 padding_mask,
@@ -285,6 +270,7 @@ class SHubertModel(BaseFairseqModel):
             padding_mask=padding_mask,
             layer=layer,
         )
+        # After the encoder 
 
         if features_only:
             return {
@@ -297,45 +283,47 @@ class SHubertModel(BaseFairseqModel):
             "losses": {},
         }
     
-        predictions = []
-        for i, head in enumerate(self.heads):
-            channel_pred = head(x)  
-            predictions.append(channel_pred)
-        predictions = torch.stack(predictions, dim=2)  
+    # ----------
+    # IMPLEMENT linear layer, transformer, conv instead of mean pool
+    # Temporal reduction layer.
+    # ----------
 
-        labels = torch.stack(
-            [
-                face_labels,
-                left_hand_labels,
-                right_hand_labels,
-                body_posture_labels
-            ], 
-            dim=2) 
+    # average the temporal dimension, the result is a feature that resumes all the frames of the video
+        if padding_mask is not None:
+            x_masked = x.clone() # avoid modifying original data in memory
+            x_masked[padding_mask] = 0.0 # force zero value for additional frames
+            # we invert the mask (True -> real frames) so that we can sum the num. of frames for each sample
+            # shape of padding_mask is (B, T), and lengths's is (B, 1)
+            lengths = (~padding_mask).sum(dim=1, keepdim=True).clamp(min=1) 
+            # for each sample we do a mean of each embedding dimension across all the frames that that sample lasts:
+            x_mpooled = x_masked.sum(dim=1) / lengths # Mean Pooling
+            # (B, 768) / (B, 1) --> (B, 768)
 
-        predictions_flat = predictions.view(-1, self.codebook_size) 
-        labels_flat = labels.view(-1) 
+        else:
+            x_mpooled = x.mean(dim=1) # collapse the T dimension
 
-        # Ensure labels are of correct shape
-        labels_flat = labels_flat.squeeze(-1)  # Remove the last dimension if it's size 1
-
-        # Correct the mask_indices to match the shape of predictions_flat
-        mask_indices_reduced = mask_indices.any(dim=-1)  # Reduce mask to (B, T, C) by collapsing last dimension
-        mask_indices_flat = mask_indices_reduced.view(-1)  # Flatten to match the shape of (B * T * C)
+        # Apply Batch Normalization:
+        x_bn = self.batch_norm(x_mpooled)
+        # Apply the Linear Classifier:
+        gloss_predicted = self.head(x_bn) # shape (Batch_Size, Glossary_Size)
+       
 
         # Calculate the loss only for the masked positions (where mask_indices_flat is zero)
-        masked_loss = F.cross_entropy(
-            predictions_flat[mask_indices_flat == 0],
-            labels_flat[mask_indices_flat == 0],
+        cls_loss = F.cross_entropy(
+            gloss_predicted,
+            labels,
             reduction='none'
         )
 
-        # Store the result
-        result['losses']['kmeans_loss'] = masked_loss
 
+        # Store the result
+        result['losses']['cls_loss'] = cls_loss
         
+        # Return the logits to compute accuracy metrics
+        result['logits'] = gloss_predicted
 
         if "sample_size" not in result:
-            result['sample_size'] = masked_loss.numel()
+            result['sample_size'] = cls_loss.numel()
 
         return result
 

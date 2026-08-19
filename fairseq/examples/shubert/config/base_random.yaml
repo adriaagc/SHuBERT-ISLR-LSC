@@ -1,21 +1,21 @@
 # @package _group_
 
-common:
+common: # general parameters
   fp16: true
   log_format: json
-  log_interval: 200
-  tensorboard_logdir: tb
+  log_interval: 200 # shows the training metrics (in the terminal) every 200 updates
+  tensorboard_logdir: tb # saves the loss graphs, lr, etc in a folder named tb 
 
-checkpoint:
-  save_interval: 10
-  save_interval_updates: 50000
-  keep_interval_updates: 10
-  no_epoch_checkpoints: true
-  load_checkpoint_on_all_dp_ranks: true
+checkpoint: # how is the model saved
+  save_interval: 10 # every 10 epochs saves the model (weights)
+  save_interval_updates: 50000 # checkpoint every 50000 parameter updates 
+  keep_interval_updates: 10 # keep the last 10 checkpoints
+  no_epoch_checkpoints: true # do not save every epoch
+  load_checkpoint_on_all_dp_ranks: true # in environments multi-GPU every GPU loads the same checkpoint
 
-task:
+task: # task definition and input data
   _name: audio_pretraining
-  data: /path_to_manifest_directory/manifest_file.csv
+  data: /path_to_manifest_directory/manifest_file.csv # route with the filenames of 4 channels and size (num. frames)
   kmeans_label_paths:
       face: /path_to_face_kmeans_file/face_256.km
       left_hand: /path_to_left_hand_kmeans_file/lhand_256.km
@@ -27,33 +27,33 @@ task:
   sample_rate: 1
 
 dataset:
-  num_workers: 16
-  max_tokens: 15000
+  num_workers: 16 # avoid bottleneck with the GPU: 16 CPU workers are loading and pre-processing the data 
+  max_tokens: 15000 # max. num. of frames per batch
   skip_invalid_size_inputs_valid_test: true
   validate_interval: 100
   required_batch_size_multiple: 1
   disable_validation: true
 
 distributed_training:
-  distributed_world_size: 8
+  distributed_world_size: 8 # cluster of 8 GPUs in parallel
   ddp_backend: legacy_ddp
 
 criterion:
-  _name: model
+  _name: model # loss function is computed inside the forward method of the shubert model
 
 optimization:
-  max_update: 400000
-  lr: [0.0005]
+  max_update: 400000 # training stops when achieves this number of parameter updates
+  lr: [0.0005] # learning rate
 
 optimizer:
   _name: adam
   adam_betas: (0.9,0.98)
   adam_eps: 1e-06
-  weight_decay: 0.01
+  weight_decay: 0.01 # regularization parameter (prevent overfitting)
 
 lr_scheduler:
   _name: polynomial_decay
-  warmup_updates: 32000
+  warmup_updates: 32000 # during the first updates the lr progressively increments from 0 to 0.0005 in order to stabilize the start of the training 
 
 model:
   _name: shubert

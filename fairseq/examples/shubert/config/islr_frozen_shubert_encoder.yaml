@@ -1,0 +1,71 @@
+# @package _group_
+common:
+  fp16: true
+  log_format: json
+  log_interval: 100                                       # ← log progress every N batches
+  # tensorboard_log_file: tb
+  wandb_project: shubert_islr # Nombre del proyecto donde se agruparán tus gráficas en la web
+  # wandb_run_name: islr_shubert_frozen_encoder
+
+checkpoint:
+  save_interval: 1                                         # ← save a checkpoint every epoch
+  no_epoch_checkpoints: false                              # ← keep per-epoch ckpts (if true: only stores best and last checkpoint)
+  finetune_from_model: /data/upftfg41/shared/models/SHuBERT_ASL/checkpoint_836_400000.pt #el path al checkpoint .../checkpoint_836_400000.pt   # ← load ASL backbone (resets optimizer/epoch)
+  # best_checkpoint_metric defaults to 'loss' (minimised) — fine to start
+  # restore_file: /data/upftfg41/shared/models/SHuBERT_ASL/checkpoint_836_400000.pt
+
+task:
+  _name: shubert_islr                                      # ← new task, not audio_pretraining
+  data: /data/upftfg41/shared/data/LSC_Corpus_processed/shubert_v1_features/islr_manifests/signer_disjoint       # ← DIR with train.tsv/valid.tsv/train.gloss/valid.gloss
+  max_sample_size: 5000                                    # max_duration = max_sample_sixe / FPS
+  min_sample_size: 1
+  normalize: true
+  sample_rate: 1
+  # ← DELETE the whole kmeans_label_paths block (no cluster targets when predicting glosses)
+
+dataset:
+  num_workers: 8                                           # ← subprocesses to use for data loading
+  batch_size: 128                                          # ← clips per batch (simpler than max_tokens for clip classification)
+  max_tokens: null                                         # ←
+  disable_validation: false                                # ← we WANT validation now
+  validate_interval: 1
+  train_subset: train
+  valid_subset: valid
+  skip_invalid_size_inputs_valid_test: true
+  required_batch_size_multiple: 1
+
+distributed_training:
+  distributed_world_size: 1                                # ← one 2×H100 node (use 1 for a single GPU)
+  ddp_backend: legacy_ddp
+
+criterion:
+  _name: model                                             # ← unchanged: sums net_output['losses']
+
+optimization:
+  max_epoch: 125                                           # ← was max_update: 400000
+  lr: [0.001] #per 1A i per 1B [0.0001]                    # ← fine-tune LR (was 5e-4 pretrain)
+
+optimizer:
+  _name: adam
+  adam_betas: (0.9,0.98)
+  adam_eps: 1e-06
+  weight_decay: 0.0001  #shubert paper
+
+lr_scheduler:
+  _name: polynomial_decay
+  warmup_updates: 500                                      # ← small warmup for a short run (now we have a much smaller number of epochs)
+  total_num_update: 40000                                  # num. epochs * num. samples / batch_size
+
+model:
+  _name: shubert
+  freeze_encoder: true #aquí i false per islr_full_finetune.yaml                                 # ← train the backbone
+  encoder_embed_dim: 768
+  channels_embed_dim: 384
+  channels_pose_embed_dim: 14
+  intermediate_dim: 1024
+  glossary_size: 105                                       # ← the # CHANGE 105 line becomes real config
+  mask_prob: 0.0                                           # ← no masked-prediction during ISLR fine-tune
+  encoder_layerdrop: 0 #per 1A i 0.05 per 1B
+  dropout_input: 0 #per 1A i 0.1 per 1B
+  dropout_features: 0 #per 1A i 0.1 per 1B
+  feature_grad_mult: 0 #per 1A i 1.0 per 1B                                  # 1.0 = train the stream projections; 0.0 = freeze front-end

@@ -8,3 +8,18 @@ __pycache__/
 *.py[cod]
 *xiaodan*.*
 manifest_files/
+
+# Archivos de compilación de Cython/Python (los que te llenan el VS Code)
+*.so
+.eggs/
+*.egg-info/
+build/
+dist/
+
+# Checkpoints y logs de entrenamiento
+tb/
+ckpt/
+*.out
+*.log
+wandb/
+.gitignore

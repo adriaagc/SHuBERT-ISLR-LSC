@@ -35,11 +35,19 @@ class SHubertConfig(Wav2Vec2Config):
     channels_pose_embed_dim: int = field(default=14)
     intermediate_dim: int = field(default=1024)
     mask_strategy: str = field(default="random")
-    glossary_size: int = field(default=105) # CHANGE 105 by the actual number of glosses
+    glossary_size: int = field(default=104) # CHANGE 105 by the actual number of glosses
     freeze_encoder: bool = field(
                                 default=False,
                                 metadata={"help": "freeze the SHuBERT backbone; train only the gloss head (linear probe)"},
                             )
+    class_weights_path: Optional[str] = field(
+        default="/home/agarciac/data/Spontaneous-LSC-Recognition/shubert_v1_features/islr_manifests/signer_disjoint/train_class_weights.npy",
+        metadata={"help": "Path to pre-computed class weights numpy array."}
+    )
+    lora_r: int = field(
+        default=1,
+        metadata={"help": "Rank dimension for LoRA"}
+    )
     
 
 
@@ -85,7 +93,7 @@ class SHubertModel(BaseFairseqModel):
         self.encoder = TransformerEncoder(cfg)
         self.layer_norm = LayerNorm(self.channel_embed * 4)
         
-        self.layer_norm_face = LayerNorm(self.channel_embed)
+        self.layer_norm_face = LayerNorm(self.channel_embed) # normalize each feature vector
         self.layer_norm_lhand = LayerNorm(self.channel_embed)
         self.layer_norm_rhand = LayerNorm(self.channel_embed)
         self.layer_norm_body = LayerNorm(self.channel_pose_embed)
@@ -113,6 +121,21 @@ class SHubertModel(BaseFairseqModel):
                 p.requires_grad_(True)
             logger.info("freeze_encoder=True → linear probe (only the gloss head trains)")
 
+        if cfg.class_weights_path and os.path.exists(cfg.class_weights_path):
+            weights_np = np.load(cfg.class_weights_path)
+            weights_tensor = torch.from_numpy(weights_np).float()
+            assert weights_tensor.shape == (cfg.glossary_size,), (
+                f"Weight shape mismatch! Expected ({cfg.glossary_size},), got {weights_tensor.shape}"
+            )
+            logger.info(f"Loaded class weights from {cfg.class_weights_path}")
+        else:
+            if cfg.class_weights_path:
+                logger.warning(f"Class weights file not found at {cfg.class_weights_path}. Defaulting to equal weights.")
+            weights_tensor = torch.ones(cfg.glossary_size, dtype=torch.float32)
+        
+        # access via self.class_weights, not a trainable variable and it is not necessary to be stored in the .ckpt 
+        self.register_buffer("class_weights", weights_tensor, persistent=False)
+
 
     def state_dict(self, destination=None, prefix="", keep_vars=False):
 
@@ -126,7 +149,7 @@ class SHubertModel(BaseFairseqModel):
     def build_model(cls, cfg: SHubertConfig, task=None):
         """Build a new model instance."""
 
-        return cls(cfg)
+        return cls(cfg) # this is the same as doing SHubertModel(cfg) so it returns an instance of the model
 
     def apply_mask(
         self,
@@ -221,7 +244,7 @@ class SHubertModel(BaseFairseqModel):
         kmeans_labels=None,  
         ):
 
-        # Apply layer normalization to each part
+        # 1. Layer Normalization to each feature vector
         face_features = self.layer_norm_face(source["face"]) 
         left_hand_features = self.layer_norm_lhand(source["left_hand"])  
         right_hand_features = self.layer_norm_rhand(source["right_hand"])     
@@ -229,15 +252,15 @@ class SHubertModel(BaseFairseqModel):
 
         labels = gloss_labels # shape (Batch_Size, )
 
-        # Apply separate linear projections for each channel
+        #2. Linear Projections: now each tensor is (B, T, 256)
         face_features = self.face_proj(face_features)
         left_hand_features = self.left_hand_proj(left_hand_features)
         right_hand_features = self.right_hand_proj(right_hand_features)
         body_posture_features = self.body_posture_proj(body_posture_features)  
 
 
-        # concatenate the projected features
-        # its size will be (Batch_Size, T, 4 ,256)
+        # join the projected features
+        # its size will be (B, T, 4, 256)
         features = torch.stack(
             [
                 face_features,
@@ -245,7 +268,7 @@ class SHubertModel(BaseFairseqModel):
                 right_hand_features,
                 body_posture_features
             ], 
-            dim=2) 
+            dim=2) # adds a new dimension after T 
         
         if mask and self.mask_prob > 0:
             x, mask_indices = self.apply_mask(
@@ -261,9 +284,9 @@ class SHubertModel(BaseFairseqModel):
             
         x = self.dropout_input(x) 
 
-        x = x.view(x.size(0), x.size(1), -1)  
+        x = x.view(x.size(0), x.size(1), -1)        # keeps B and T and converts to shape (B, T, 1024), check paper
         if self.post_extract_proj is not None:
-            x = self.post_extract_proj(x)  
+            x = self.post_extract_proj(x)           # last dim. (D) from 1024 to 768, the dimensions of the encoder
 
         x, layer_results = self.encoder(
             x,
@@ -311,7 +334,9 @@ class SHubertModel(BaseFairseqModel):
         # Calculate the loss only for the masked positions (where mask_indices_flat is zero)
         cls_loss = F.cross_entropy(
             gloss_predicted,
-            labels,
+            labels - 1,         # this is necessary because the labels are in the range 1 - GlossarySize.
+            weight = self.class_weights,
+            label_smoothing = 0.1,
             reduction='none'
         )
 

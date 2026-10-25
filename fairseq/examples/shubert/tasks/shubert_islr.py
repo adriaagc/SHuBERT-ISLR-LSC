@@ -26,11 +26,11 @@ class ShubertISLRDataset(FileAudioDataset):
         if self.skipped_indices:                     # keep alignment if any short clip was dropped
             gloss = [g for i, g in enumerate(gloss) if i not in self.skipped_indices]
         assert len(gloss) == len(self.fnames), f"{len(gloss)} labels != {len(self.fnames)} clips"
-        self.gloss_labels = gloss
+        self.gloss_labels = gloss # arary that contains the gloss label of each sample
 
     def __getitem__(self, index):
         item = super().__getitem__(index)            # {"id","source":{4 streams},"kmeans_labels":{}}
-        item["gloss"] = self.gloss_labels[index]
+        item["gloss"] = self.gloss_labels[index]     # add the gloss item which will contain the label of the sample
         return item
 
     def collater(self, samples):
@@ -40,7 +40,7 @@ class ShubertISLRDataset(FileAudioDataset):
 
         parts = ["face", "left_hand", "right_hand", "body_posture"]
         lengths = [len(s["source"]["face"]) for s in samples]       # number of frames of every sample
-        Tmax, B = max(lengths), len(samples)        # max. number of frames and batch size.
+        Tmax, B = max(lengths), len(samples)                        # max. number of frames and batch size.
 
         source = {}
         for p in parts:                              # pad each stream to (B, Tmax, D)

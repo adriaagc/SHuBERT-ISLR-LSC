@@ -29,7 +29,7 @@ conda activate work_env
 
 fairseq_root=$PROJECT_ROOT/fairseq
 path=$fairseq_root/examples/shubert/config              # route where the .yaml is 
-config=islr_full_finetune                               # name of the .yaml file
+config=islr_full_finetune_v2                               # name of the .yaml file
 code_dir=$fairseq_root/examples/shubert                 # dir where shubert.py and shubert_isrl.py are  
 
 
@@ -45,7 +45,7 @@ export WANDB_API_KEY="wandb_v1_Gtlg5eeKKTO1mWhMNFTm48p2OXO_LH51GMuvVy1T3rJ7ILVD7
 export WANDB_ENTITY="agarciaac-universitat-pompeu-fabra"
 export WANDB_PROJECT="shubert_islr"
 export WANDB_NAME="islr_shubert_full_finetune" # this is the run name
-export WANDB_RUN_GROUP="1B_full_finetune"  # to organise the wandb workspace in groups
+export WANDB_RUN_GROUP="1B_full_finetune_spontaneous"  # to organise the wandb workspace in groups
 
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M)
 

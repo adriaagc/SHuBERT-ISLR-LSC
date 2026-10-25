@@ -63,7 +63,7 @@ model:
   channels_embed_dim: 384
   channels_pose_embed_dim: 14
   intermediate_dim: 1024
-  glossary_size: 105                                       # ← the # CHANGE 105 line becomes real config
+  glossary_size: 104                                       # ← the # CHANGE 105 line becomes real config
   mask_prob: 0.0                                           # ← no masked-prediction during ISLR fine-tune
   encoder_layerdrop: 0 #per 1A i 0.05 per 1B
   dropout_input: 0 #per 1A i 0.1 per 1B

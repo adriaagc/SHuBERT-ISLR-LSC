@@ -167,6 +167,60 @@ def main(cfg: FairseqConfig) -> None:
         # don't cache epoch iterators for sharded datasets
         disable_iterator_cache=task.has_sharded_data("train"),
     )
+
+    # original num. params and trainables:
+    orig_total_params = sum(p.numel() for p in trainer._model.parameters())
+    orig_trainable_params = sum(p.numel() for p in trainer._model.parameters() if p.requires_grad)
+
+    #LoRA implementation: (only linear layers)
+    from peft import LoraConfig, get_peft_model
+
+    lora_r = getattr(cfg.model, "lora_r", 1)
+
+    lora_config = LoraConfig(
+        r=lora_r,                                   # r: rank of the weight matrices
+        lora_alpha=1,                               # scaling factor (2xr)
+        lora_dropout=0.1,
+        bias="none",                                # updates only to A and B (low-rank decomposition of ΔW)
+        # target_modules=["q_proj", "v_proj"],      # apply on both query and value weight matrices
+        target_modules=[                            # only the linear layers (SHuBERT paper)
+            "k_proj",
+            "v_proj",
+            "q_proj",
+            "out_proj",
+            "fc1",
+            "fc2",
+            "post_extract_proj",
+            "face_proj",
+            "left_hand_proj",
+            "right_hand_proj",
+            "body_posture_proj",
+        ],              
+        modules_to_save=["head"],                   # keep the classification head completely trainable
+    )
+    trainer._model = get_peft_model(trainer.get_model(), lora_config)
+
+    trainer._wrapped_model = None
+
+    # Extract PEFT parameter counts
+    trainable_params, all_params = trainer.get_model().get_nb_trainable_parameters()
+    trainable_pct = 100 * (trainable_params / all_params)
+
+    # Log comparison
+    logger.info("=== Model Parameter Summary ===")
+    logger.info(f"Original Model Trainable Params: {orig_trainable_params:,} / {orig_total_params:,}")
+    logger.info(f"LoRA Model Trainable Params:     {trainable_params:,} / {all_params:,} ({trainable_pct:.2f}%)")
+    logger.info(f"Parameter Reduction:             {100 - trainable_pct:.2f}% frozen")
+    logger.info("=================================")
+
+    # Different learning rates for LoRA and head weights.
+    for name, param in trainer.get_model().named_parameters():
+        if param.requires_grad:
+            param.param_group = "lora" if "lora_" in name else "head"    
+    #---------------------
+    
+    trainer._optimizer = None # rest so Fairseq builds the definitive adam_groups w/ lora params too. 
+
     if cfg.common.tpu:
         import torch_xla.core.xla_model as xm
 

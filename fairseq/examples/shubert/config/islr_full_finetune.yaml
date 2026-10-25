@@ -13,6 +13,9 @@ checkpoint:
   finetune_from_model: /data/upftfg41/shared/models/SHuBERT_ASL/checkpoint_836_400000.pt #el path al checkpoint .../checkpoint_836_400000.pt   # ← load ASL backbone (resets optimizer/epoch)
   # best_checkpoint_metric defaults to 'loss' (minimised) — fine to start
   # restore_file: /data/upftfg41/shared/models/SHuBERT_ASL/checkpoint_836_400000.pt
+  best_checkpoint_metric: val_acc_micro # early stopping on accuracy rather than loss
+  maximize_best_checkpoint_metric: true
+  patience: 12 # stop if does not improve in N epochs
 
 task:
   _name: shubert_islr                                      # ← new task, not audio_pretraining
@@ -63,9 +66,9 @@ model:
   channels_embed_dim: 384
   channels_pose_embed_dim: 14
   intermediate_dim: 1024
-  glossary_size: 105                                       # ← the # CHANGE 105 line becomes real config
+  glossary_size: 104                                       # ← the # CHANGE 105 line becomes real config
   mask_prob: 0.0                                           # ← no masked-prediction during ISLR fine-tune
-  encoder_layerdrop: 0.05 #0 per 1A i 0.05 per 1B
-  dropout_input: 0.1 #0 per 1A i 0.1 per 1B
-  dropout_features: 0.1 #0 per 1A i 0.1 per 1B
+  encoder_layerdrop: 0.1 #0 per 1A i 0.05 per 1B
+  dropout_input: 0.2 #0 per 1A i 0.1 per 1B
+  dropout_features: 0.2 #0 per 1A i 0.1 per 1B (double all dropouts)
   feature_grad_mult: 1.0 #0 per 1A i 1.0 per 1B                                  # 1.0 = train the stream projections; 0.0 = freeze front-end

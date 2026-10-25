@@ -36,7 +36,7 @@ class RawAudioDataset(FairseqDataset):
         pad=False,
         normalize=False,
         compute_mask_indices=False,
-        **mask_compute_kwargs,
+        **mask_compute_kwargs, # dictionary 
     ):
         super().__init__()
 
@@ -56,7 +56,7 @@ class RawAudioDataset(FairseqDataset):
             self._C = mask_compute_kwargs["encoder_embed_dim"]
             self._conv_feature_layers = eval(mask_compute_kwargs["conv_feature_layers"])
 
-    def __getitem__(self, index):
+    def __getitem__(self, index): # implemented in a subclass that inherits from RawAudioDataset (e.g. FileAudioDataset)
         raise NotImplementedError()
 
     def __len__(self):
@@ -78,7 +78,7 @@ class RawAudioDataset(FairseqDataset):
 
     def crop_to_min_size(self, feat_tensor, target_size, start=None, end=None):
         
-        # for labels consistency
+        # for labels consistency (we have already cropped the source so we can re-use the star:end values for the labels)
         if start is not None and end is not None:
             for part in feat_tensor.keys():
                 feat_tensor[part] = feat_tensor[part][start:end, :]
@@ -87,10 +87,10 @@ class RawAudioDataset(FairseqDataset):
         size = feat_tensor["face"].size(0)    
         diff = size - target_size
         if diff <= 0:
-            return feat_tensor, 0, size
+            return feat_tensor, 0, size # cannot crop as it is smaller or equal than target_size
 
-
-        start = np.random.randint(0, diff + 1)
+        # otherwise we crop
+        start = np.random.randint(0, diff + 1) 
         end = start + target_size
         for part in feat_tensor.keys():
             feat_tensor[part] = feat_tensor[part][start:end, :]
@@ -99,7 +99,7 @@ class RawAudioDataset(FairseqDataset):
 
 
     def _compute_mask_indices(self, dims, padding_mask):
-        B, T, C = dims
+        B, T, C = dims # B: samples, T: frames, C: channels
         mask_indices, mask_channel_indices = None, None
         if self.mask_compute_kwargs["mask_prob"] > 0:
             mask_indices = compute_mask_indices(
@@ -133,41 +133,41 @@ class RawAudioDataset(FairseqDataset):
 
     @staticmethod
     def _bucket_tensor(tensor, num_pad, value):
-        return F.pad(tensor, (0, num_pad), value=value)
+        return F.pad(tensor, (0, num_pad), value=value) # we add num_pad values to the right of the last dimension (C)
     
     def collater(self, samples):
-        samples = [s for s in samples if s["source"] is not None]
+        samples = [s for s in samples if s["source"] is not None] # filters null samples
         if len(samples) == 0:
             return {}
 
         sources = [s["source"] for s in samples]
         sizes = [len(s["face"]) for s in sources]
-        target_size = min(min(sizes), self.max_sample_size)
+        target_size = min(min(sizes), self.max_sample_size) # takes the #frames of the shortest sample or the maximum allowed length.
 
         collated_samples = []
 
-        for i, source in enumerate(sources):
+        for i, source in enumerate(sources): # processes samples one at a time.
             cropped_source, start_crop, end_crop = self.crop_to_min_size(source, target_size)
             labels = samples[i]["kmeans_labels"]
-            cropped_labels, _, _ = self.crop_to_min_size(labels, target_size, start_crop, end_crop)
+            cropped_labels, _, _ = self.crop_to_min_size(labels, target_size, start_crop, end_crop) # we align the kmeans label (one per frame) with the crop.
                 
             sample = {
                 "face": cropped_source["face"],
                 "left_hand": cropped_source["left_hand"],
                 "right_hand": cropped_source["right_hand"],
                 "body_posture": cropped_source["body_posture"],
-                "label_face": cropped_labels["face"],
+                "label_face": cropped_labels["face"],               # a label is an integer from 1 to K (Kmeans)
                 "label_left_hand": cropped_labels["left_hand"],
                 "label_right_hand": cropped_labels["right_hand"],
                 "label_body_posture": cropped_labels["body_posture"],
             }
 
-            collated_samples.append(sample)
+            collated_samples.append(sample) # we have cropped the source and its labels
             
         input = {"source": collated_samples}
         out = {
-            "id": torch.LongTensor([s["id"] for s in samples]),
-            "net_input": input,
+            "id": torch.LongTensor([s["id"] for s in samples]), # id is just an identifier so that we can relate each sample with its corresponding video
+            "net_input": input, # list of processed samples
         }
 
         return out     
@@ -259,29 +259,29 @@ class FileAudioDataset(RawAudioDataset):
 
         self.text_compressor = TextCompressor(level=text_compression_level)
 
-        skipped = 0
+        skipped = 0 # counts how many samples were skipped
         self.fnames = []
         sizes = []
         self.skipped_indices = set()
 
         with open(manifest_path, "r") as f:
             for i, line in enumerate(f):
-                items = line.strip().split("\t")
-                assert len(items) == 5, line
+                items = line.strip().split("\t") # esach line is separated by \t
+                assert len(items) == 5, line # face, left hand, right hand, and body posture routes, size (sz) or num of frames of the sample
                 sz = int(int(items[-1]))
-                if min_sample_size is not None and sz < min_sample_size:
+                if min_sample_size is not None and sz < min_sample_size: # filter short samples
                     skipped += 1
-                    self.skipped_indices.add(i)
+                    self.skipped_indices.add(i) # store the index of the skipped sample
                     continue
                 self.fnames.append({
                     "face": self.text_compressor.compress(items[0]),
                     "left_hand": self.text_compressor.compress(items[1]),
                     "right_hand": self.text_compressor.compress(items[2]),
                     "body_posture": self.text_compressor.compress(items[3]),
-                })
+                }) # if the sample is valid we store a dictionary with the 4 valid compressed routes
                 sizes.append(sz)
         logger.info(f"loaded {len(self.fnames)}, skipped {skipped} samples") 
-
+        # prints the number of valid and skipped samples
 
         self.sizes = np.array(sizes, dtype=np.int64)
 
@@ -302,12 +302,12 @@ class FileAudioDataset(RawAudioDataset):
 
     def load_kmeans_labels(self, kmeans_label_paths):
         kmeans_labels = {}
-        for part, label_path in kmeans_label_paths.items():
+        for part, label_path in kmeans_label_paths.items(): # part = {"face", "left_hand", "right_hand", "body_posture"}
             labels = []
             with open(label_path, "r") as f:
-                for line in f:
-                    labels.append([int(x) for x in line.strip().split()])
-            kmeans_labels[part] = labels
+                for line in f: # each line corresponds to one sample (video)
+                    labels.append([int(x) for x in line.strip().split()]) # each sample is converted into an array, where each element is the label of a frame.
+            kmeans_labels[part] = labels # fill the dictionary.
             
             # Verify that the number of labels matches the number of samples
             assert len(labels) == len(self.fnames), f"Mismatch in number of samples for {part} kmeans labels"
@@ -324,8 +324,8 @@ class FileAudioDataset(RawAudioDataset):
             fn_part = self.text_compressor.decompress(fn_part)
             path_part = fn_part
             feats_part = torch.from_numpy(np.load(path_part)).float()
-            assert feats_part.dim() == 2, feats_part.dim()
-            feats[part] = feats_part
+            assert feats_part.dim() == 2, feats_part.dim() # enforce bidimensional tensors (T, C)
+            feats[part] = feats_part # dictionary {part: feats_part_tensor}
         
         item = {"id": index, "source": feats}
         
@@ -402,3 +402,21 @@ class BinarizedAudioDataset(RawAudioDataset):
         feats = torch.from_numpy(wav).float()
         feats = self.postprocess(feats)
         return {"id": index, "source": feats}
+
+
+
+
+# class ShubertISLRDataset(FileAudioDataset):
+#     def __init__(self, *a, gloss_label_path, **kw):
+#         super().__init__(*a, **kw)
+#         self.gloss = [int(x) for x in open(gloss_label_path)]   # row-aligned to manifest
+#     def __getitem__(self, i):
+#         item = super().__getitem__(i)          # {id, source:{face,...}}  ← reused as-is
+#         item["gloss"] = self.gloss[item["id"]]
+#         return item
+#     def collater(self, samples):
+#         batch = super().collater(samples)      # reuse stream padding/cropping
+#         batch["gloss"] = torch.tensor([s["gloss"] for s in samples])
+#         return batch
+
+    

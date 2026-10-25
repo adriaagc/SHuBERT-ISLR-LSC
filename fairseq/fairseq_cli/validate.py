@@ -59,7 +59,7 @@ def main(cfg: DictConfig, override_args=None):
         overrides = None
 
     # Load ensemble
-    logger.info("loading model(s) from {}".format(cfg.common_eval.path))
+    logger.info("loading model(s) from {}".format(cfg.common_eval.path)) # path to the checkpoint
     models, saved_cfg, task = checkpoint_utils.load_model_ensemble_and_task(
         [cfg.common_eval.path],
         arg_overrides=overrides,
@@ -89,6 +89,11 @@ def main(cfg: DictConfig, override_args=None):
         except KeyError:
             raise Exception("Cannot find dataset: " + subset)
 
+        # --- NEW ---
+        # this will allow to compute the top-k and confusion_matrix in reduce_metrics() 
+        criterion.__class__.compute_extra_test_metrics = subset == "test"
+        # -----------
+
         # Initialize data iterator
         itr = task.get_batch_iterator(
             dataset=dataset,
@@ -114,6 +119,24 @@ def main(cfg: DictConfig, override_args=None):
             default_log_format=("tqdm" if not cfg.common.no_progress_bar else "simple"),
         )
 
+        # ----------------------------------------
+        # create the wandb run manually:
+        try:
+            import wandb
+            if distributed_utils.is_master(cfg.distributed_training) and wandb.run is None:
+                wandb.init(
+                    project=cfg.common.wandb_project or os.environ.get("WANDB_PROJECT", "shubert_islr"),
+                    entity=os.environ.get("WANDB_ENTITY"),
+                    name=os.environ.get("WANDB_NAME", "eval_run"),
+                    group=os.environ.get("WANDB_RUN_GROUP", "evaluations"),
+                    mode="offline",
+                    dir=os.path.abspath(os.environ.get("WANDB_DIR", "."))
+                )
+                logger.info(f"W&B Run was initialized: {wandb.run.name} and {wandb.run.dir}")
+        except:
+            logger.warning("wandb not installed.")
+        # ----------------------------------------
+
         log_outputs = []
         for i, sample in enumerate(progress):
             sample = utils.move_to_cuda(sample) if use_cuda else sample
@@ -134,6 +157,10 @@ def main(cfg: DictConfig, override_args=None):
             log_output = agg.get_smoothed_values()
 
         progress.print(log_output, tag=subset, step=i)
+
+    # finish the wandb run:
+    if distributed_utils.is_master(cfg.distributed_training) and wandb.run is not None:
+        wandb.finish()
 
 
 def cli_main():

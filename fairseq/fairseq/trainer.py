@@ -564,8 +564,9 @@ class Trainer(object):
                         layer._prune_fc_layer(remove_index=remove_index)
                     logger.info(self.model)
 
+                state["model"] = {k: v for k, v in state["model"].items() if not k.startswith("heads.")} # we only need the weights of the backbone as we changed heads for head.
                 self.model.load_state_dict(
-                    state["model"], strict=True, model_cfg=self.cfg.model
+                    state["model"], strict=False, model_cfg=self.cfg.model
                 )
                 # save memory for later steps
                 del state["model"]

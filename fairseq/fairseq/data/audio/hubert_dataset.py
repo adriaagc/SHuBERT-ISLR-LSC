@@ -16,16 +16,17 @@ import torch.nn.functional as F
 from fairseq.data import data_utils
 from fairseq.data.fairseq_dataset import FairseqDataset
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) # to print info during the dataset load.
 
 
 def load_audio(manifest_path, max_keep, min_keep):
-    n_long, n_short = 0, 0
+    n_long, n_short = 0, 0 # counts how many where too small/large
     names, inds, sizes = [], [], []
     with open(manifest_path) as f:
-        root = f.readline().strip()
-        for ind, line in enumerate(f):
-            items = line.strip().split("\t")
+        root = f.readline().strip() # e.g. /data/upftfg41/shared/...
+        # all the files will be then realtive to root
+        for ind, line in enumerate(f): # line = [file]\t[size]
+            items = line.strip().split("\t") 
             assert len(items) == 2, line
             sz = int(items[1])
             if min_keep is not None and sz < min_keep:
@@ -36,7 +37,7 @@ def load_audio(manifest_path, max_keep, min_keep):
                 names.append(items[0])
                 inds.append(ind)
                 sizes.append(sz)
-    tot = ind + 1
+    tot = ind + 1 # num. of samples
     logger.info(
         (
             f"max_keep={max_keep}, min_keep={min_keep}, "
@@ -47,32 +48,32 @@ def load_audio(manifest_path, max_keep, min_keep):
     return root, names, inds, tot, sizes
 
 
-def load_label(label_path, inds, tot):
+def load_label(label_path, inds, tot): # inds: samples that survived load_audio
     with open(label_path) as f:
         labels = [line.rstrip() for line in f]
-        assert (
+        assert ( # all the labels from the same sample must be in the same line (labels1\n labels2\n etc)
             len(labels) == tot
         ), f"number of labels does not match ({len(labels)} != {tot})"
-        labels = [labels[i] for i in inds]
+        labels = [labels[i] for i in inds] # returns only the labels of the videos that survived.
     return labels
 
 
 def load_label_offset(label_path, inds, tot):
     with open(label_path) as f:
-        code_lengths = [len(line.encode("utf-8")) for line in f]
+        code_lengths = [len(line.encode("utf-8")) for line in f] # stores the num. of bytes that each line of labels occupies.
         assert (
-            len(code_lengths) == tot
+            len(code_lengths) == tot # one line per sample.
         ), f"number of labels does not match ({len(code_lengths)} != {tot})"
-        offsets = list(itertools.accumulate([0] + code_lengths))
+        offsets = list(itertools.accumulate([0] + code_lengths)) # offsets indicate positions inside the file.
         offsets = [(offsets[i], offsets[i + 1]) for i in inds]
-    return offsets
+    return offsets # e.g. [(0,9),(9,13)] 0---line1---9---line2---13
 
 
 def verify_label_lengths(
-    audio_sizes,
-    audio_rate,
+    audio_sizes, # num. frames
+    audio_rate, # fps
     label_path,
-    label_rate,
+    label_rate, # labels/s
     inds,
     tot,
     tol=0.1,  # tolerance in seconds
@@ -82,13 +83,13 @@ def verify_label_lengths(
         return
 
     with open(label_path) as f:
-        lengths = [len(line.rstrip().split()) for line in f]
+        lengths = [len(line.rstrip().split()) for line in f] # num. of labels per sample
         assert len(lengths) == tot
-        lengths = [lengths[i] for i in inds]
+        lengths = [lengths[i] for i in inds] # filter
     num_invalid = 0
     for i, ind in enumerate(inds):
-        dur_from_audio = audio_sizes[i] / audio_rate
-        dur_from_label = lengths[i] / label_rate
+        dur_from_audio = audio_sizes[i] / audio_rate # e.g. 125 frames / 25 fps = 5 secs
+        dur_from_label = lengths[i] / label_rate # e.g. 100 labels / 20 lps = 5 secs
         if abs(dur_from_audio - dur_from_label) > tol:
             logger.warning(
                 (
@@ -107,13 +108,13 @@ def verify_label_lengths(
         )
 
 
-class HubertDataset(FairseqDataset):
+class HubertDataset(FairseqDataset): # inherits from FairseqDataset 
     def __init__(
         self,
         manifest_path: str,
         sample_rate: float,
         label_paths: List[str],
-        label_rates: Union[List[float], float],  # -1 for sequence labels
+        label_rates: Union[List[float], float],  # -1 for sequence labels (whem 1 label per video)
         pad_list: List[str],
         eos_list: List[str],
         label_processors: Optional[List[Any]] = None,
@@ -145,7 +146,7 @@ class HubertDataset(FairseqDataset):
             else label_rates
         )
         self.store_labels = store_labels
-        if store_labels:
+        if store_labels: # toggle between storing the labels directly or the offsets.
             self.label_list = [load_label(p, inds, tot) for p in label_paths]
         else:
             self.label_paths = label_paths
@@ -202,6 +203,7 @@ class HubertDataset(FairseqDataset):
         return len(self.sizes)
 
     def crop_to_max_size(self, wav, target_size):
+    # only crops when the length of a sample exceeds the maximum len.
         size = len(wav)
         diff = size - target_size
         if diff <= 0:
@@ -209,15 +211,17 @@ class HubertDataset(FairseqDataset):
 
         start, end = 0, target_size
         if self.random_crop:
-            start = np.random.randint(0, diff + 1)
+            start = np.random.randint(0, diff + 1) # random starting point of the crop
             end = size - diff + start
         return wav[start:end], start
 
     def collater(self, samples):
+    # collater is the function DataLoader calls when gathers  
+    # samples as it transforms them into a batch with a uniform size.
         # target = max(sizes) -> random_crop not used
         # target = max_sample_size -> random_crop used for long
         samples = [s for s in samples if s["source"] is not None]
-        if len(samples) == 0:
+        if len(samples) == 0: # samples --> list of dictionaries 
             return {}
 
         audios = [s["source"] for s in samples]
@@ -254,20 +258,21 @@ class HubertDataset(FairseqDataset):
         return batch
 
     def collater_audio(self, audios, audio_size):
+        # audios: list that contains the 'source' of every sample.
         collated_audios = audios[0].new_zeros(len(audios), audio_size)
         padding_mask = (
             torch.BoolTensor(collated_audios.shape).fill_(False)
             # if self.pad_audio else None
-        )
-        audio_starts = [0 for _ in audios]
+        ) # at first every sample and frame is valid (False)
+        audio_starts = [0 for _ in audios] # will change if a sample needs to be cropped
         for i, audio in enumerate(audios):
             diff = len(audio) - audio_size
-            if diff == 0:
+            if diff == 0: # no padding is needed, just copies the sample
                 collated_audios[i] = audio
-            elif diff < 0:
-                assert self.pad_audio
+            elif diff < 0: # needs padding (short sample)
+                assert self.pad_audio # if pad_audio = False, this case should never occur as audio_size is the minimum size among all samples.
                 collated_audios[i] = torch.cat([audio, audio.new_full((-diff,), 0.0)])
-                padding_mask[i, diff:] = True
+                padding_mask[i, diff:] = True # the las diff frames are "fake"
             else:
                 collated_audios[i], audio_starts[i] = self.crop_to_max_size(
                     audio, audio_size

@@ -167,59 +167,87 @@ def main(cfg: FairseqConfig) -> None:
         # don't cache epoch iterators for sharded datasets
         disable_iterator_cache=task.has_sharded_data("train"),
     )
-
+    
     # original num. params and trainables:
     orig_total_params = sum(p.numel() for p in trainer._model.parameters())
     orig_trainable_params = sum(p.numel() for p in trainer._model.parameters() if p.requires_grad)
 
-    #LoRA implementation: (only linear layers)
-    from peft import LoraConfig, get_peft_model
+    if (getattr(cfg.model, "apply_lora", False)): # toggle between LoRA and SHuBERT base model
+        
+        logger.info("=== Applying LoRA to SHuBERT base model ===")
 
-    lora_r = getattr(cfg.model, "lora_r", 1)
+        #LoRA implementation: (only linear layers)
+        from peft import LoraConfig, get_peft_model
 
-    lora_config = LoraConfig(
-        r=lora_r,                                   # r: rank of the weight matrices
-        lora_alpha=1,                               # scaling factor (2xr)
-        lora_dropout=0.1,
-        bias="none",                                # updates only to A and B (low-rank decomposition of ΔW)
-        # target_modules=["q_proj", "v_proj"],      # apply on both query and value weight matrices
-        target_modules=[                            # only the linear layers (SHuBERT paper)
-            "k_proj",
-            "v_proj",
-            "q_proj",
-            "out_proj",
-            "fc1",
-            "fc2",
-            "post_extract_proj",
-            "face_proj",
-            "left_hand_proj",
-            "right_hand_proj",
-            "body_posture_proj",
-        ],              
-        modules_to_save=["head"],                   # keep the classification head completely trainable
-    )
-    trainer._model = get_peft_model(trainer.get_model(), lora_config)
+        lora_r = getattr(cfg.model, "lora_r", 1)        # get the chosen lora rank  
 
-    trainer._wrapped_model = None
+        lora_config = LoraConfig(
+            r=lora_r,                                   # r: rank of the weight matrices
+            lora_alpha=1,                               # scaling factor (2xr)
+            lora_dropout=0.1,
+            bias="none",                                # updates only to A and B (low-rank decomposition of ΔW)
+            # target_modules=["q_proj", "v_proj"],      # apply on both query and value weight matrices
+            target_modules=[                            # only the linear layers (SHuBERT paper)
+                "k_proj",
+                "v_proj",
+                "q_proj",
+                "out_proj",
+                "fc1",
+                "fc2",
+                "post_extract_proj",
+                "face_proj",
+                "left_hand_proj",
+                "right_hand_proj",
+                "body_posture_proj",
+            ],              
+            modules_to_save=["head"],                   # keep the classification head completely trainable
+        )
+        trainer._model = get_peft_model(trainer.get_model(), lora_config)
 
-    # Extract PEFT parameter counts
-    trainable_params, all_params = trainer.get_model().get_nb_trainable_parameters()
-    trainable_pct = 100 * (trainable_params / all_params)
+        trainer._wrapped_model = None
 
-    # Log comparison
-    logger.info("=== Model Parameter Summary ===")
-    logger.info(f"Original Model Trainable Params: {orig_trainable_params:,} / {orig_total_params:,}")
-    logger.info(f"LoRA Model Trainable Params:     {trainable_params:,} / {all_params:,} ({trainable_pct:.2f}%)")
-    logger.info(f"Parameter Reduction:             {100 - trainable_pct:.2f}% frozen")
-    logger.info("=================================")
+        # Extract PEFT parameter counts
+        trainable_params, all_params = trainer.get_model().get_nb_trainable_parameters()
+        trainable_pct = 100 * (trainable_params / all_params)
 
-    # Different learning rates for LoRA and head weights.
-    for name, param in trainer.get_model().named_parameters():
-        if param.requires_grad:
-            param.param_group = "lora" if "lora_" in name else "head"    
-    #---------------------
-    
-    trainer._optimizer = None # rest so Fairseq builds the definitive adam_groups w/ lora params too. 
+        # Log comparison
+        logger.info("=== Model Parameter Summary ===")
+        logger.info(f"Original Model Trainable Params: {orig_trainable_params:,} / {orig_total_params:,}")
+        logger.info(f"LoRA Model Trainable Params:     {trainable_params:,} / {all_params:,} ({trainable_pct:.2f}%)")
+        logger.info(f"Parameter Reduction:             {100 - trainable_pct:.2f}% frozen")
+        logger.info("=================================")
+
+    if (getattr(cfg.model, "split_lr", False)):
+
+        split_criteria = getattr(cfg.model, "split_name", "lora_") # LoRA weights by default 
+        param_count = 0 # to verify the split 
+
+        # Different learning rates for LoRA (or other) and head weights.
+        if split_criteria == "lora_":
+            for name, param in trainer.get_model().named_parameters():
+                if param.requires_grad:
+                    if split_criteria in name:
+                        param.param_group = "lora"
+                        param_count += 1
+                    else:
+                        param.param_group = "head"     
+
+            logger.info(f"{param_count} of the {trainable_params} trainable params are LoRA.")
+        #---------------------
+        # Different learning rate for backbone
+        elif split_criteria == "backbone":
+            for name, param in trainer.get_model().named_parameters():
+                if param.requires_grad:
+                    if name.startswith("head."):
+                        param.param_group = "head"
+                        param_count += 1
+                    else:
+                        param.param_group = "backbone"
+
+            logger.info(f"{param_count} of the {orig_trainable_params} trainable params are head.")
+        #---------------------
+        
+        trainer._optimizer = None # reset so Fairseq builds the definitive adam_groups w/ lora params too. 
 
     if cfg.common.tpu:
         import torch_xla.core.xla_model as xm

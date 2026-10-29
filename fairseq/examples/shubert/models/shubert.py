@@ -44,6 +44,11 @@ class SHubertConfig(Wav2Vec2Config):
         default="/home/agarciac/data/Spontaneous-LSC-Recognition/shubert_v1_features/islr_manifests/signer_disjoint/train_class_weights.npy",
         metadata={"help": "Path to pre-computed class weights numpy array."}
     )
+    split_lr: bool = field(default=False) # This will separate trainable params (head, split_name)
+    split_name: Optional[str] = field(
+        default="lora_",
+        metadata={"help": "You can only split by lora_ or backbone params"})
+    apply_lora: bool = field(default=False)
     lora_r: int = field(
         default=1,
         metadata={"help": "Rank dimension for LoRA"}

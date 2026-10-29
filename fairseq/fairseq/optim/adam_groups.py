@@ -16,6 +16,7 @@
 import logging
 from dataclasses import dataclass, field
 
+from fairseq.logging import metrics
 from fairseq.optim import register_optimizer
 from fairseq.optim.adam import FairseqAdam, FairseqAdamConfig
 
@@ -38,7 +39,7 @@ class FairseqAdamGroups(FairseqAdam):
     def __init__(self, cfg, params):
         # Fairseq delivers `params` as a flat tensors list: regroup by label.
         # Params w/o label (e.g. criterion) go to base group (head).
-        buckets = {} # dict w/ 2 lists of params (lora and head)
+        buckets = {} # dict w/ 2 lists of params (lora and head) --> {"lora": [p1,p2,...], "head": [p1,p2,...]}
         for p in params:
             buckets.setdefault(getattr(p, "param_group", "head"), []).append(p) # head is default
 
@@ -66,9 +67,10 @@ class FairseqAdamGroups(FairseqAdam):
         ] # list of {"params":ps, "name":"head" or "lora", lr_scale:0.1 or 1.0}, where "head" goes 1st
 
         # FairseqAdam but with defined groups
-        super().__init__(cfg, groups)
+        super().__init__(cfg, groups)  # the parent class will assign to the self.para_groups attribute the list of dictionaries (groups)
         self.set_lr(self.optimizer_config["lr"])
 
+        # print a summary to the .out:
         for g in self.param_groups:
             n = sum(p.numel() for p in g["params"])
             logger.info(
@@ -77,6 +79,10 @@ class FairseqAdamGroups(FairseqAdam):
             )
 
     def set_lr(self, lr):
-        # called by lr_schedulers; otherwise the same scaling factor would go to every LR
+        # called by lr_schedulers at each step; otherwise the same scaling factor would go to every LR
         for g in self.param_groups:
-            g["lr"] = lr * g.get("lr_scale", 1.0)
+            g["lr"] = lr * g.get("lr_scale", 1.0) # scale the lr of each group of params
+        
+            # Show both lr:
+            group_name = g.get("name", "default")
+            metrics.log_scalar(f"lr_{group_name}", g["lr"], priority=300, round=8)

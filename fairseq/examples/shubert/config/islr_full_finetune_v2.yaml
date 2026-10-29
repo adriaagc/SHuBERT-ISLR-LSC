@@ -46,7 +46,7 @@ criterion:
   _name: model                                             # ← unchanged: sums net_output['losses']
 
 optimization:
-  max_epoch: 250                                           # ← was max_update: 400000
+  max_epoch: 500                                           # ← was max_update: 400000
   lr: [0.0001] #[0.001] #per 1A i per 1B [0.0001]                    # ← fine-tune LR (was 5e-4 pretrain)
 
 optimizer:
@@ -59,7 +59,7 @@ optimizer:
 lr_scheduler:
   _name: polynomial_decay
   warmup_updates: 500                                      # ← small warmup for a short run (now we have a much smaller number of epochs)
-  total_num_update: 40000                                  # num. epochs * num. samples / batch_size
+  total_num_update: 50000                                  # (num. epochs) * (num. updates per epoch). Default we have 84 updates/epoch
 
 model:
   _name: shubert
@@ -74,3 +74,7 @@ model:
   dropout_input: 0.1 #0 per 1A i 0.1 per 1B
   dropout_features: 0.1 #0 per 1A i 0.1 per 1B (double all dropouts)
   feature_grad_mult: 1.0 #0 per 1A i 1.0 per 1B                                  # 1.0 = train the stream projections; 0.0 = freeze front-end
+  apply_lora: False
+  lora_r: 1 # LoRA rank
+  split_lr: True
+  split_name: backbone

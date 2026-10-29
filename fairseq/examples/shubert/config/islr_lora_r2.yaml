@@ -74,4 +74,7 @@ model:
   dropout_input: 0.1 #0 per 1A i 0.1 per 1B
   dropout_features: 0.1 #0 per 1A i 0.1 per 1B (double all dropouts)
   feature_grad_mult: 1.0 #0 per 1A i 1.0 per 1B                                  # 1.0 = train the stream projections; 0.0 = freeze front-end
+  apply_lora: True
   lora_r: 2 # LoRA rank
+  split_lr: True
+  split_name: lora_

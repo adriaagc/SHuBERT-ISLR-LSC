@@ -228,7 +228,7 @@ def main(cfg: FairseqConfig) -> None:
                 if param.requires_grad:
                     if split_criteria in name:
                         param.param_group = "lora"
-                        param_count += 1
+                        param_count += param.numel()
                     else:
                         param.param_group = "head"     
 
@@ -240,9 +240,9 @@ def main(cfg: FairseqConfig) -> None:
                 if param.requires_grad:
                     if name.startswith("head."):
                         param.param_group = "head"
-                        param_count += 1
+                        param_count += param.numel()
                     else:
-                        param.param_group = "backbone"
+                        param.param_group = "lora"
 
             logger.info(f"{param_count} of the {orig_trainable_params} trainable params are head.")
         #---------------------

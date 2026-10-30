@@ -7,7 +7,7 @@
 
 # --- MANUAL CONFIGURATION ---
 JOB_NAME="eval_1B_full_finetune_spontaneous" # "eval_1B_full_finetune" or "eval_1A_frozen_encoder"
-DATETIME="2026-10-15_17-05"
+DATETIME="2026-10-30_16-25"
 TASK_NAME="1B" #"1B"
 CKPT_FILE="checkpoint_best.pt"
 BATCH_SIZE=128
@@ -50,5 +50,4 @@ srun --nodes=1 --ntasks=1 fairseq-validate "$DATA_DIR" \
         --valid-subset "$SUBSET" \
         --batch-size $BATCH_SIZE \
         --log-format json \
-        --model-overrides " {'model': {'_name': 'shubert_lora'}} " \
         > "${EVAL_LOG_DIR}/eval_log.txt" 2>&1

@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h100:1
-#SBATCH --time=3:00:00
+#SBATCH --time=13:00:00
 #SBATCH --output=/home/agarciac/logs/1B/slurm_%x_%j.out     #/path_to_output_logs_dir/slurm_%x.out
 #SBATCH --error=/home/agarciac/logs/1B/slurm_%x_%j.err      #/path_to_output_logs_dir/slurm_%x.err
 

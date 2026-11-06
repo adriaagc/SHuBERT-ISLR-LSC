@@ -167,6 +167,19 @@ def main(cfg: FairseqConfig) -> None:
         # don't cache epoch iterators for sharded datasets
         disable_iterator_cache=task.has_sharded_data("train"),
     )
+
+    # --- SHOW WHICH LAYERS ARE NOT BEING LOADED CORRECTLY ---
+    if getattr(cfg.checkpoint, "finetune_from_model", None):
+        logger.info("Verifying checkpoint load...")
+        sd = trainer.get_model().state_dict()
+        ck = torch.load(cfg.checkpoint.finetune_from_model, map_location="cpu")["model"]
+        
+        missing = sorted(set(sd.keys()) - set(ck.keys()))
+        unexpected = sorted(set(ck.keys()) - set(sd.keys()))
+        
+        logger.info(f"Missing layers at the checkpoint (expected head/batch_norm or lora): {missing}")
+        logger.info(f"Ignored layers by the checkpoint (expected is heads): {unexpected}")
+    # -------------------------------------
     
     # original num. params and trainables:
     orig_total_params = sum(p.numel() for p in trainer._model.parameters())
@@ -180,10 +193,19 @@ def main(cfg: FairseqConfig) -> None:
         from peft import LoraConfig, get_peft_model
 
         lora_r = getattr(cfg.model, "lora_r", 1)        # get the chosen lora rank  
+        lora_alpha = lora_r * 2
+
+        base_model = trainer.get_model()
+        for name, module in base_model.named_modules():
+            if module.__class__.__name__ == "MultiheadAttention":
+                # Estas banderas desactivan la función F.multi_head_attention_forward
+                # obligando al modelo a pasar por self.q_proj(x), self.k_proj(x), etc.
+                module.skip_embed_dim_check = True
+                module.qkv_same_embed_dim = False
 
         lora_config = LoraConfig(
             r=lora_r,                                   # r: rank of the weight matrices
-            lora_alpha=1,                               # scaling factor (2xr)
+            lora_alpha= lora_alpha,                     # scaling factor (2xr)
             lora_dropout=0.1,
             bias="none",                                # updates only to A and B (low-rank decomposition of ΔW)
             # target_modules=["q_proj", "v_proj"],      # apply on both query and value weight matrices
@@ -200,7 +222,7 @@ def main(cfg: FairseqConfig) -> None:
                 "right_hand_proj",
                 "body_posture_proj",
             ],              
-            modules_to_save=["head"],                   # keep the classification head completely trainable
+            modules_to_save=["head", "batch_norm"],     # keep the classification head completely trainable and batch norm (otw initialized w/ rand weights)
         )
         trainer._model = get_peft_model(trainer.get_model(), lora_config)
 
@@ -216,6 +238,8 @@ def main(cfg: FairseqConfig) -> None:
         logger.info(f"LoRA Model Trainable Params:     {trainable_params:,} / {all_params:,} ({trainable_pct:.2f}%)")
         logger.info(f"Parameter Reduction:             {100 - trainable_pct:.2f}% frozen")
         logger.info("=================================")
+        
+        trainer._optimizer = None
 
     if (getattr(cfg.model, "split_lr", False)):
 

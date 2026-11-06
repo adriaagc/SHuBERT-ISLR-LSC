@@ -40,6 +40,7 @@ class SHubertConfig(Wav2Vec2Config):
                                 default=False,
                                 metadata={"help": "freeze the SHuBERT backbone; train only the gloss head (linear probe)"},
                             )
+    class_weights: bool = field(default=False)
     class_weights_path: Optional[str] = field(
         default="/home/agarciac/data/Spontaneous-LSC-Recognition/shubert_v1_features/islr_manifests/signer_disjoint/train_class_weights.npy",
         metadata={"help": "Path to pre-computed class weights numpy array."}
@@ -126,7 +127,7 @@ class SHubertModel(BaseFairseqModel):
                 p.requires_grad_(True)
             logger.info("freeze_encoder=True → linear probe (only the gloss head trains)")
 
-        if cfg.class_weights_path and os.path.exists(cfg.class_weights_path):
+        if cfg.class_weights and cfg.class_weights_path and os.path.exists(cfg.class_weights_path):
             weights_np = np.load(cfg.class_weights_path)
             weights_tensor = torch.from_numpy(weights_np).float()
             assert weights_tensor.shape == (cfg.glossary_size,), (
@@ -134,7 +135,9 @@ class SHubertModel(BaseFairseqModel):
             )
             logger.info(f"Loaded class weights from {cfg.class_weights_path}")
         else:
-            if cfg.class_weights_path:
+            if not cfg.class_weights:
+                logger.info("Class weights are disabled. Defaulting to equal weights.")
+            elif cfg.class_weights_path:
                 logger.warning(f"Class weights file not found at {cfg.class_weights_path}. Defaulting to equal weights.")
             weights_tensor = torch.ones(cfg.glossary_size, dtype=torch.float32)
         
@@ -339,7 +342,7 @@ class SHubertModel(BaseFairseqModel):
         # Calculate the loss only for the masked positions (where mask_indices_flat is zero)
         cls_loss = F.cross_entropy(
             gloss_predicted,
-            labels - 1,         # this is necessary because the labels are in the range 1 - GlossarySize.
+            labels - 1,         # this is necessary because the labels are in the range [1 - GlossarySize], while predictions are [0 - (Glossary_Size-1)].
             weight = self.class_weights,
             label_smoothing = 0.1,
             reduction='none'

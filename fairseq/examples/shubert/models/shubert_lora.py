@@ -28,10 +28,6 @@ class SHubertLoraConfig(SHubertConfig):
         default=1, 
         metadata={"help": "Rank of the LoRA matrices"}
     )
-    lora_alpha: int = field(
-        default=1, 
-        metadata={"help": "LoRA's scaling factor"}
-    )
     lora_dropout: float = field(
         default=0.1, 
         metadata={"help": "Dropout applied to the layers of LoRA"}
@@ -41,7 +37,7 @@ class SHubertLoraConfig(SHubertConfig):
         metadata={"help": "Comma separated list of the layers of the SHuBERT model for LoRA to be applied"}
     )
     lora_modules_to_save: str = field(
-        default="head", 
+        default="head,batch_norm", 
         metadata={"help": "Comma separated list of the layers of the SHuBERT model for LoRA to not be applied"}
     )
 
@@ -58,13 +54,19 @@ class SHubertLoraModel(SHubertModel):
             )
 
         base_model = SHubertModel(cfg)
+
+        for name, module in base_model.named_modules():
+            if module.__class__.__name__ == "MultiheadAttention":
+                module.skip_embed_dim_check = True
+                module.qkv_same_embed_dim = False
+                logger.info(f"Fast-path deactivated) at the layer: {name}")
         
         target_modules = [m.strip() for m in cfg.lora_target_modules.split(",") if m.strip()]
         save_modules = [m.strip() for m in cfg.lora_modules_to_save.split(",") if m.strip()]
         
         lora_config = LoraConfig(
             r=cfg.lora_r,
-            lora_alpha=cfg.lora_alpha,
+            lora_alpha=2*cfg.lora_r,
             lora_dropout=cfg.lora_dropout,
             bias="none",
             target_modules=target_modules,
@@ -73,7 +75,7 @@ class SHubertLoraModel(SHubertModel):
 
         logger.info(
             f"Applying LoRA to base SHuBERT model with rank={cfg.lora_r}, "
-            f"alpha={cfg.lora_alpha}, lora_dropout={cfg.lora_dropout},target_modules={target_modules}, save_models={save_modules}"
+            f"lora_dropout={cfg.lora_dropout},target_modules={target_modules}, save_models={save_modules}"
         )
 
         # Wrap the whole model with PEFT

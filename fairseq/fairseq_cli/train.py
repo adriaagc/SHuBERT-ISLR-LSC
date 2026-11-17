@@ -262,7 +262,7 @@ def main(cfg: FairseqConfig) -> None:
         elif split_criteria == "backbone":
             for name, param in trainer.get_model().named_parameters():
                 if param.requires_grad:
-                    if name.startswith("head."):
+                    if name.startswith("head.") or name.startswith("batch_norm") or name == "layer_weights":
                         param.param_group = "head"
                         param_count += param.numel()
                     else:

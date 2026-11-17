@@ -54,6 +54,8 @@ class SHubertConfig(Wav2Vec2Config):
         default=1,
         metadata={"help": "Rank dimension for LoRA"}
     )
+    label_smoothing: float = field(default=0.2)
+    apply_layer_weights: bool = field(default=True)
     
 
 
@@ -111,7 +113,9 @@ class SHubertModel(BaseFairseqModel):
 
         self.head = nn.Linear(cfg.encoder_embed_dim, cfg.glossary_size) # We will only predict the gloss so we just need a single classification layer.
 
-
+        # weighted sum of the 12 layers of the encoder
+        self.layer_weights = nn.Parameter(torch.ones(12))
+        self.apply_layer_weights = cfg.apply_layer_weights
 
         # Define separate linear layers for each channel
         self.face_proj = nn.Linear(self.channel_embed, cfg.intermediate_dim // 4)
@@ -144,6 +148,7 @@ class SHubertModel(BaseFairseqModel):
         # access via self.class_weights, not a trainable variable and it is not necessary to be stored in the .ckpt 
         self.register_buffer("class_weights", weights_tensor, persistent=False)
 
+        self.label_smoothing = cfg.label_smoothing
 
     def state_dict(self, destination=None, prefix="", keep_vars=False):
 
@@ -313,7 +318,16 @@ class SHubertModel(BaseFairseqModel):
         result = {
             "losses": {},
         }
-    
+
+    # weighted sum of the 12 encoder layers:
+        if self.apply_layer_weights:    
+            layer_states = torch.stack([l[0] for l in layer_results], dim=0)    # Shape: (12, B, T, C)
+            weights_1d = F.softmax(self.layer_weights, dim=0)                   # the weights sum 1
+            weights_4d = weights_1d.view(-1, 1, 1, 1)                           # broadcast
+            x = (layer_states * weights_4d).sum(dim=0)                          # weighted sum (B, T, C)
+            x = x.transpose(0, 1)
+
+
     # ----------
     # IMPLEMENT linear layer, transformer, conv instead of mean pool
     # Temporal reduction layer.
@@ -344,7 +358,7 @@ class SHubertModel(BaseFairseqModel):
             gloss_predicted,
             labels - 1,         # this is necessary because the labels are in the range [1 - GlossarySize], while predictions are [0 - (Glossary_Size-1)].
             weight = self.class_weights,
-            label_smoothing = 0.1,
+            label_smoothing = self.label_smoothing,
             reduction='none'
         )
 

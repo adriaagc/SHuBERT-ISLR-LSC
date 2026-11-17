@@ -111,6 +111,14 @@ class ModelCriterion(FairseqCriterion):
                         logits.topk(k, dim=-1).indices.detach().cpu() + 1 # native method of the torch.Tensor class. 
                     ) # topk returns a tuple w/ the k largest logits of the specified dimension and the indices (gloss IDs), but we only keep the IDs. 
                 # -----------
+            
+            # --- NEW: Extract the layer_weights from the model ---
+            if hasattr(model, "layer_weights"):
+                logging_output["layer_weights"] = model.layer_weights.detach().cpu().numpy()
+            # Por si el modelo está envuelto en DistributedDataParallel (DDP)
+            elif hasattr(model, "module") and hasattr(model.module, "layer_weights"): 
+                logging_output["layer_weights"] = model.module.layer_weights.detach().cpu().numpy()
+            # -----------------------------------------------------
                 
 
         for lk in self.log_keys:
@@ -148,6 +156,9 @@ class ModelCriterion(FairseqCriterion):
         metrics.log_scalar("loss", loss_sum / sample_size, sample_size, round=3) # 1/N Σ J(y, y_pred) 
         metrics.log_scalar("ntokens", ntokens)
         metrics.log_scalar("nsentences", nsentences)
+
+        if len(logging_outputs) > 0 and "layer_weights" in logging_outputs[0]:
+            logger.info(f"Layer weights: {logging_outputs[0]['layer_weights']}")
 
         # logging_outputs is a list of logging_output (with metrics from all the batches).
         # this makes sure that this block is only executed during validation (otw preds wouldn't exist)
@@ -231,6 +242,7 @@ class ModelCriterion(FairseqCriterion):
                         output_path = os.path.join(target_dir, "topk_pred.npy")
                         # save the topk predictions of the whole test split.
                         np.save(output_path, all_topk_preds)
+
                     except Exception as e:
                         logger.warning(f"Error loading to W&B: {e}")
             # -----------
@@ -244,6 +256,7 @@ class ModelCriterion(FairseqCriterion):
             "preds",
             "target",
             "topk_preds",
+            "layer_weights",
         }
 
         world_size = utils.item(

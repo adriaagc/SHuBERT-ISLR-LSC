@@ -37,7 +37,7 @@ class SHubertLoraConfig(SHubertConfig):
         metadata={"help": "Comma separated list of the layers of the SHuBERT model for LoRA to be applied"}
     )
     lora_modules_to_save: str = field(
-        default="head,batch_norm", 
+        default="head,batch_norm,layer_weights", 
         metadata={"help": "Comma separated list of the layers of the SHuBERT model for LoRA to not be applied"}
     )
 

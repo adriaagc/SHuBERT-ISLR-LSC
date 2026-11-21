@@ -157,9 +157,6 @@ class ModelCriterion(FairseqCriterion):
         metrics.log_scalar("ntokens", ntokens)
         metrics.log_scalar("nsentences", nsentences)
 
-        if len(logging_outputs) > 0 and "layer_weights" in logging_outputs[0]:
-            logger.info(f"Layer weights: {logging_outputs[0]['layer_weights']}")
-
         # logging_outputs is a list of logging_output (with metrics from all the batches).
         # this makes sure that this block is only executed during validation (otw preds wouldn't exist)
         if len(logging_outputs) > 0 and "preds" in logging_outputs[0]:
@@ -191,6 +188,10 @@ class ModelCriterion(FairseqCriterion):
 
                 # Compute the top-k accuracies and the confusion matrix on the test set
                 else:
+                    # Show the layer weights only when testing a checkpoint:
+                    if len(logging_outputs) > 0 and "layer_weights" in logging_outputs[0]:
+                        logger.info(f"Layer weights: {logging_outputs[0]['layer_weights']}")
+
                     all_topk_preds = torch.cat( # shape (Total_Batch_Size, K)
                         [
                             log["topk_preds"]

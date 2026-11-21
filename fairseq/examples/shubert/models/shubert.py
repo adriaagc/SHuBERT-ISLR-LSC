@@ -129,6 +129,11 @@ class SHubertModel(BaseFairseqModel):
                 p.requires_grad_(False)
             for p in self.head.parameters(): # …except the gloss head
                 p.requires_grad_(True)
+
+            self.layer_weights.requires_grad_(True) # unfreeze layer_weights
+            for p in self.batch_norm.parameters():  # unfreeze batch_norm
+                p.requires_grad_(True)
+
             logger.info("freeze_encoder=True → linear probe (only the gloss head trains)")
 
         if cfg.class_weights and cfg.class_weights_path and os.path.exists(cfg.class_weights_path):
@@ -299,9 +304,9 @@ class SHubertModel(BaseFairseqModel):
 
         x = x.view(x.size(0), x.size(1), -1)        # keeps B and T and converts to shape (B, T, 1024), check paper
         if self.post_extract_proj is not None:
-            x = self.post_extract_proj(x)           # last dim. (D) from 1024 to 768, the dimensions of the encoder
+            x = self.post_extract_proj(x)           # (B, T, 768) last dim. 1024 --> 768, to match embedding space of the encoder
 
-        x, layer_results = self.encoder(
+        x, layer_results = self.encoder(            # x is the output of the last layer (12)
             x,
             padding_mask=padding_mask,
             layer=layer,
@@ -321,11 +326,11 @@ class SHubertModel(BaseFairseqModel):
 
     # weighted sum of the 12 encoder layers:
         if self.apply_layer_weights:    
-            layer_states = torch.stack([l[0] for l in layer_results], dim=0)    # Shape: (12, B, T, C)
+            layer_states = torch.stack([l[0] for l in layer_results], dim=0)    # Shape: (12, T, B, C)
             weights_1d = F.softmax(self.layer_weights, dim=0)                   # the weights sum 1
             weights_4d = weights_1d.view(-1, 1, 1, 1)                           # broadcast
-            x = (layer_states * weights_4d).sum(dim=0)                          # weighted sum (B, T, C)
-            x = x.transpose(0, 1)
+            x = (layer_states * weights_4d).sum(dim=0)                          
+            x = x.transpose(0, 1)                                               # weighted sum (B, T, C)
 
 
     # ----------
@@ -340,7 +345,7 @@ class SHubertModel(BaseFairseqModel):
             # we invert the mask (True -> real frames) so that we can sum the num. of frames for each sample
             # shape of padding_mask is (B, T), and lengths's is (B, 1)
             lengths = (~padding_mask).sum(dim=1, keepdim=True).clamp(min=1) 
-            # for each sample we do a mean of each embedding dimension across all the frames that that sample lasts:
+            # for each sample we do a mean of each embedding dimension across all the real frames:
             x_mpooled = x_masked.sum(dim=1) / lengths # Mean Pooling
             # (B, 768) / (B, 1) --> (B, 768)
 

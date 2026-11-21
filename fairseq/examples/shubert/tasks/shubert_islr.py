@@ -1,6 +1,8 @@
 import os
 import logging
 from dataclasses import dataclass
+import numpy as np
+
 
 import torch
 
@@ -62,7 +64,26 @@ class ShubertISLRDataset(FileAudioDataset):
                 "gloss_labels": torch.LongTensor([s["gloss"] for s in samples]),
             },
         }
+    
+    # CODE TO AVOID THAT ALL EPOCHS ARE THE SAME AND THAT ALL BATCHES HAVE SAMPLES WITH SIMILAR LENGTHS
 
+    @property
+    def can_reuse_epoch_itr_across_epochs(self):
+        """
+        Sobrescribe el valor True heredado de EpochListening.
+        Fuerza a Fairseq a recalcular y mezclar los batches en cada época.
+        """
+        return False
+
+    def ordered_indices(self):
+        """
+        Sobrescribe el np.lexsort heredado de RawAudioDataset.
+        Rompe el ordenamiento por longitud y aplica una mezcla puramente aleatoria.
+        """
+        if self.shuffle:
+            return np.random.permutation(len(self))
+        else:
+            return np.arange(len(self))
 
 @dataclass
 class ShubertISLRConfig(AudioPretrainingConfig):

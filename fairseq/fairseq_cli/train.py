@@ -222,9 +222,21 @@ def main(cfg: FairseqConfig) -> None:
                 "right_hand_proj",
                 "body_posture_proj",
             ],              
-            modules_to_save=["head", "batch_norm"],     # keep the classification head completely trainable and batch norm (otw initialized w/ rand weights)
+            modules_to_save=["head", "batch_norm", "layer_weights"],  # keep these layers completely trainable!
         )
         trainer._model = get_peft_model(trainer.get_model(), lora_config)
+
+        # in case LoRA freezes layer_weights or batch_norm:
+        for name, param in trainer.get_model().named_parameters():
+            if "layer_weights" in name or "batch_norm" in name:
+                if not param.requires_grad:
+                    logger.info(f"unfreezing {name}")
+                    param.requires_grad = True
+
+        logger.info("=== Name of the trainable params with LoRA ===")
+        for name, param in trainer.get_model().named_parameters():
+            if param.requires_grad:
+                logger.info(f"Trainable: {name} | Shape: {param.shape}")
 
         trainer._wrapped_model = None
 
